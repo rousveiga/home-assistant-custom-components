@@ -1,0 +1,8 @@
+{
+	"domain": "dali",
+	"name": "USB-to-DALI integration.",
+	"documentation": "https://github.com/dgomes/home-assistant-custom-components/tree/master/dali",
+	"dependencies": [],
+	"codeowners": ["@rousveiga"],
+	"requirements": ["python-dali"]
+  }
