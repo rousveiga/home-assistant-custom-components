@@ -10,7 +10,7 @@ import voluptuous as vol
 
 from homeassistant.const import (CONF_NAME, CONF_ID, CONF_DEVICES)
 from homeassistant.components.light import (
-    ATTR_BRIGHTNESS, SUPPORT_BRIGHTNESS, Light, PLATFORM_SCHEMA)
+    ATTR_BRIGHTNESS, SUPPORT_BRIGHTNESS, LightEntity, PLATFORM_SCHEMA)
 import homeassistant.helpers.config_validation as cv
 
 REQUIREMENTS = ['python-dali']

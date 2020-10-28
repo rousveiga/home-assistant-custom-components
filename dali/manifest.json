@@ -4,5 +4,5 @@
 	"documentation": "https://github.com/rousveiga/home-assistant-custom-components/tree/master/dali",
 	"dependencies": [],
 	"codeowners": ["@rousveiga"],
-	"requirements": ["python-dali", "git+https://github.com/awelkie/pyhidapi.git@master#pyhidapi==1.0.0"]
+	"requirements": ["pyusb", "python-dali", "git+https://github.com/awelkie/pyhidapi.git@master#pyhidapi==1.0.0"]
   }
