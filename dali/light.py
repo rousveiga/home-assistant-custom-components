@@ -56,7 +56,7 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
     add_devices([DALILight(dali_driver, lock, config[CONF_NAME], l) for l in lamps])
     
 
-class DALILight(Light):
+class DALILight(LightEntity):
     """Representation of an DALI Light."""
 
     def __init__(self, driver, driver_lock, controller_name, ballast):
