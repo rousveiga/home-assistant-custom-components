@@ -15,7 +15,9 @@ import homeassistant.helpers.config_validation as cv
 
 REQUIREMENTS = ['python-dali']
 
+#logging.basicConfig(level=logging.DEBUG)
 _LOGGER = logging.getLogger(__name__)
+#_LOGGER.setLevel(logging.DEBUG)
 
 SUPPORT_DALI = SUPPORT_BRIGHTNESS
 
@@ -54,7 +56,6 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
             break
 
     add_devices([DALILight(dali_driver, lock, config[CONF_NAME], l) for l in lamps])
-    
 
 class DALILight(LightEntity):
     """Representation of an DALI Light."""
@@ -76,9 +77,9 @@ class DALILight(LightEntity):
             with self.driver_lock:
                 cmd = QueryActualLevel(self.addr)
                 r = self.driver.send(cmd)
-                if r.value != None and r.value.as_integer < 255:
-                    self._brightness = r.value.as_integer
-                    if r.value.as_integer > 0:
+                if r.value != None and r.value < 255:
+                    self._brightness = r.value
+                    if r.value > 0:
                         r.state = True
 
         except ResponseError as e:
