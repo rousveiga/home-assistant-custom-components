@@ -15,39 +15,47 @@ import homeassistant.helpers.config_validation as cv
 
 REQUIREMENTS = ['python-dali']
 
-#logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.DEBUG)
 _LOGGER = logging.getLogger(__name__)
-#_LOGGER.setLevel(logging.DEBUG)
+_LOGGER.setLevel(logging.DEBUG)
 
 SUPPORT_DALI = SUPPORT_BRIGHTNESS
 
 CONF_MAX_GEARS = "max_gears"
+CONF_DRIVERS = "drivers"
 
 MAX_RANGE = 64
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
+DRIVER_SCHEMA = vol.Schema({
     vol.Required(CONF_NAME): cv.string,
     vol.Optional(CONF_MAX_GEARS, default=MAX_RANGE): cv.positive_int,
+})
+
+PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
+    vol.Required(CONF_DRIVERS, default=[]): vol.All(cv.ensure_list, [DRIVER_SCHEMA]),
 })
 
 
 def setup_platform(hass, config, add_devices, discovery_info=None):
     """Set up the DALI Light platform."""
 
-    from dali.driver.hasseb import SyncHassebDALIUSBDriver 
     from dali.address import Short
     from dali.command import YesNoResponse, Response
     import dali.gear.general as gear
+    import dali.driver.hasseb as hasseb_driver
+    from dali.driver.hasseb import SyncHassebDALIUSBDriver 
     import threading
 
-    dali_drivers = SyncHassebDALIUSBDriverFactory() 
+    dali_drivers = hasseb_driver.SyncHassebDALIUSBDriverFactory() 
 
-    for dali_driver in dali_drivers:
+    for idx, dali_driver in enumerate(dali_drivers):
         _LOGGER.debug("Found DALI driver")
         lock = threading.RLock()
 
+        driver_config = config[CONF_DRIVERS][idx]
+
         lamps = []
-        for lamp in range(0,config[CONF_MAX_GEARS]):
+        for lamp in range(0, driver_config[CONF_MAX_GEARS]):
             try:
                 _LOGGER.debug("Searching for Gear on address <{}>".format(lamp))
                 r = dali_driver.send(gear.QueryControlGearPresent(Short(lamp)))
@@ -62,7 +70,7 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
                 _LOGGER.error("Hasseb DALI master not found")
                 break
 
-        add_devices([DALILight(dali_driver, lock, config[CONF_NAME], l) for l in lamps])
+        add_devices([DALILight(dali_driver, lock, driver_config[CONF_NAME], l) for l in lamps])
 
 class DALILight(LightEntity):
     """Representation of an DALI Light."""
