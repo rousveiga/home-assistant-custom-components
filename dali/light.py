@@ -38,24 +38,31 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
     from dali.address import Short
     from dali.command import YesNoResponse, Response
     import dali.gear.general as gear
-
-    dali_driver = SyncHassebDALIUSBDriver() 
     import threading
-    lock = threading.RLock()
 
-    lamps = []
-    for lamp in range(0,config[CONF_MAX_GEARS]):
-        try:
-            _LOGGER.debug("Searching for Gear on address <{}>".format(lamp))
-            r = dali_driver.send(gear.QueryControlGearPresent(Short(lamp)))
-            if isinstance(r, YesNoResponse) and r.value:
-                lamps.append(Short(lamp))
-        except Exception as e:
-            #Not present
-            _LOGGER.error("Error while QueryControlGearPresent: {}".format(e))
-            break
+    dali_drivers = SyncHassebDALIUSBDriverFactory() 
 
-    add_devices([DALILight(dali_driver, lock, config[CONF_NAME], l) for l in lamps])
+    for dali_driver in dali_drivers:
+        _LOGGER.debug("Found DALI driver")
+        lock = threading.RLock()
+
+        lamps = []
+        for lamp in range(0,config[CONF_MAX_GEARS]):
+            try:
+                _LOGGER.debug("Searching for Gear on address <{}>".format(lamp))
+                r = dali_driver.send(gear.QueryControlGearPresent(Short(lamp)))
+
+                if isinstance(r, YesNoResponse) and r.value:
+                    _LOGGER.debug("Found lamp")
+                    lamps.append(Short(lamp))
+
+            except Exception as e:
+                #Not present
+                _LOGGER.error("Error while QueryControlGearPresent: {}".format(e))
+                _LOGGER.error("Hasseb DALI master not found")
+                break
+
+        add_devices([DALILight(dali_driver, lock, config[CONF_NAME], l) for l in lamps])
 
 class DALILight(LightEntity):
     """Representation of an DALI Light."""
