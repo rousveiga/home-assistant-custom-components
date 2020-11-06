@@ -1,13 +1,9 @@
 """
 Support for DALI lights.
 
-For more details about this platform, please refer to the documentation at
-https://home-assistant.io/components/light.dali/
 """
 import logging
-
 import voluptuous as vol
-
 from homeassistant.const import (CONF_NAME, CONF_ID, CONF_DEVICES)
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS, SUPPORT_BRIGHTNESS, LightEntity, PLATFORM_SCHEMA)
@@ -15,9 +11,9 @@ import homeassistant.helpers.config_validation as cv
 
 REQUIREMENTS = ['python-dali']
 
-logging.basicConfig(level=logging.DEBUG)
+#logging.basicConfig(level=logging.DEBUG)
 _LOGGER = logging.getLogger(__name__)
-_LOGGER.setLevel(logging.DEBUG)
+#_LOGGER.setLevel(logging.DEBUG)
 
 SUPPORT_DALI = SUPPORT_BRIGHTNESS
 
@@ -38,18 +34,17 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required(CONF_DRIVERS, default=[]): vol.All(cv.ensure_list, [DRIVER_SCHEMA]),
 })
 
-
 def setup_platform(hass, config, add_devices, discovery_info=None):
     """Set up the DALI Light platform."""
 
     from dali.address import Short
     from dali.command import YesNoResponse, Response
     import dali.gear.general as gear
-    import dali.driver.hasseb as hasseb_driver
+    from dali.driver.hasseb import SyncHassebDALIUSBDriverFactory
     from dali.driver.hasseb import SyncHassebDALIUSBDriver 
     import threading
 
-    dali_drivers = hasseb_driver.SyncHassebDALIUSBDriverFactory() 
+    dali_drivers = SyncHassebDALIUSBDriverFactory() 
 
     for idx, dali_driver in enumerate(dali_drivers):
         _LOGGER.debug("Found DALI driver")
@@ -59,16 +54,16 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
 
         lamps = []
         for lamp in range(0, driver_config[CONF_MAX_GEARS]):
-            try:
+            try: # @TODO initialize new gears
                 _LOGGER.debug("Searching for Gear on address <{}>".format(lamp))
                 r = dali_driver.send(gear.QueryControlGearPresent(Short(lamp)))
 
                 if isinstance(r, YesNoResponse) and r.value:
-                    _LOGGER.debug("Found lamp")
+                    _LOGGER.debug("Found lamp!")
                     lamps.append(Short(lamp))
 
             except Exception as e:
-                #Not present
+                # This will often mean that the driver wasn't found
                 _LOGGER.error("Error while QueryControlGearPresent: {}".format(e))
                 _LOGGER.error("Hasseb DALI master not found")
                 break
@@ -77,12 +72,13 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
         add_devices([DALIBus(dali_driver, lock, driver_config[CONF_NAME], lamps, config[CONF_MAX_BUSES], idx)])
 
 class DALILight(LightEntity):
-    """Representation of an DALI Light."""
+    """Representation of an DALI light."""
 
     def __init__(self, driver, driver_lock, controller_name, ballast, bus_index):
         from dali.gear.general import QueryActualLevel
         from dali.command import ResponseError, MissingResponse
-        """Initialize a DALI Light."""
+
+        """Initialize a DALI light."""
         self._brightness = 0
         self._state = False
         self._name = "{}_{}".format(controller_name, ballast.address)
@@ -92,6 +88,7 @@ class DALILight(LightEntity):
         self.driver_lock = driver_lock
         self.addr = ballast
 
+        # A range of MAX_RANGE unique lamp IDs is allocated for each bus
         self._unique_id = (MAX_RANGE * bus_index) + self.addr.address
 
         try:
@@ -172,7 +169,7 @@ class DALILight(LightEntity):
 
     @property
     def should_poll(self):
-        """Doesn't make much sense to poll, commands have acks"""
+        """Polling is now needed so that DALI bus and DALI light states will sync"""
         return True
 
     def update(self):
@@ -208,7 +205,7 @@ class DALIBus(LightEntity):
         from dali.command import ResponseError, MissingResponse
         from dali.address import Broadcast
 
-        """Initialize a DALI Light."""
+        """Initialize a DALI bus."""
         self._brightness = 0
         self._state = False
         self._name = "{} bus".format(controller_name)
@@ -220,6 +217,7 @@ class DALIBus(LightEntity):
         self.driver_lock = driver_lock
         self.addr = Broadcast()
 
+        # Unique IDs for DALI buses are allocated after the last lamp ID range
         self._unique_id = max_buses * MAX_RANGE + bus_index
 
         self.calculate_bus_state()
@@ -229,22 +227,28 @@ class DALIBus(LightEntity):
         from dali.command import ResponseError, MissingResponse
         import usb
 
+        """The state of a DALI bus will be the same state as the lights hanging 
+        from it if all of them are consistent. If they are not, the state of the 
+        bus will be off. """
+
         try:
             with self.driver_lock:
                 last_brightness = None
 
                 for lamp_address in self.lamp_addresses:
-                    # query brightness
+                    # Query brightness
                     result = self.driver.send(QueryActualLevel(lamp_address))
                     _LOGGER.debug("DALI Bus update: lamp {} brightness is {}".format(lamp_address.address, result.value))
 
-                    # check if brightness is valid value
+                    # Check if brightness is a valid value
+                    # If so, and if it's either the first light or if it has the same value as the lights
+                    # checked before, save value and keep checking
                     if result.value != None and int(result.value) < 255 and (last_brightness == None or last_brightness == int(result.value)):
-                        last_brightness = int(result.value) # save brightness and keep checking
+                        last_brightness = int(result.value)
 
-                    else:
-                        _LOGGER.debug("Lamp {} returned invalid or different value; bus status is not unified")
-                        last_brightness = None #if brightness differs, the bus has no unified status
+                    else: # if not, bus status is not consistent; stop checking
+                        _LOGGER.debug("Lamp {} returned invalid or different value; bus status is not consistent")
+                        last_brightness = None 
                         break
 
             _LOGGER.debug("DALI Bus update: new brightness is {}".format(last_brightness))
@@ -257,6 +261,7 @@ class DALIBus(LightEntity):
             else:
                 self._state = False
 
+        # @XXX should unify these if I can't different causes / behavior
         except usb.core.USBError as e:
             _LOGGER.error("USB Error {}: {}".format(self._name, e))
             self._brightness = None
@@ -334,7 +339,7 @@ class DALIBus(LightEntity):
 
     @property
     def should_poll(self):
-        """Doesn't make much sense to poll, commands have acks"""
+        """Polling is now needed so that DALI bus and DALI light states will sync"""
         return True
 
     def update(self):
