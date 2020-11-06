@@ -23,8 +23,10 @@ SUPPORT_DALI = SUPPORT_BRIGHTNESS
 
 CONF_MAX_GEARS = "max_gears"
 CONF_DRIVERS = "drivers"
+CONF_MAX_BUSES = "max_buses"
 
 MAX_RANGE = 64
+MAX_BUSES = 4
 
 DRIVER_SCHEMA = vol.Schema({
     vol.Required(CONF_NAME): cv.string,
@@ -32,6 +34,7 @@ DRIVER_SCHEMA = vol.Schema({
 })
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
+    vol.Optional(CONF_MAX_BUSES, default=MAX_BUSES): cv.positive_int,
     vol.Required(CONF_DRIVERS, default=[]): vol.All(cv.ensure_list, [DRIVER_SCHEMA]),
 })
 
@@ -70,12 +73,13 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
                 _LOGGER.error("Hasseb DALI master not found")
                 break
 
-        add_devices([DALILight(dali_driver, lock, driver_config[CONF_NAME], l) for l in lamps])
+        add_devices([DALILight(dali_driver, lock, driver_config[CONF_NAME], l, idx) for l in lamps])
+        add_devices([DALIBus(dali_driver, lock, driver_config[CONF_NAME], lamps, config[CONF_MAX_BUSES], idx)])
 
 class DALILight(LightEntity):
     """Representation of an DALI Light."""
 
-    def __init__(self, driver, driver_lock, controller_name, ballast):
+    def __init__(self, driver, driver_lock, controller_name, ballast, bus_index):
         from dali.gear.general import QueryActualLevel
         from dali.command import ResponseError, MissingResponse
         """Initialize a DALI Light."""
@@ -87,6 +91,8 @@ class DALILight(LightEntity):
         self.driver = driver
         self.driver_lock = driver_lock
         self.addr = ballast
+
+        self._unique_id = (MAX_RANGE * bus_index) + self.addr.address
 
         try:
             with self.driver_lock:
@@ -110,8 +116,10 @@ class DALILight(LightEntity):
 
     @property
     def unique_id(self):
-        """Return the Short Address of this light."""
-        return self.addr.address
+        """The unique ID is calculated based on its bus index and its short address,
+        so that conflicts don't arise from having lamps with the same short address in
+        different buses. """
+        return self._unique_id
 
     @property
     def brightness(self):
@@ -165,7 +173,7 @@ class DALILight(LightEntity):
     @property
     def should_poll(self):
         """Doesn't make much sense to poll, commands have acks"""
-        return False 
+        return True
 
     def update(self):
         """Fetch update state."""
@@ -176,10 +184,10 @@ class DALILight(LightEntity):
         with self.driver_lock:
             try:
                 r = self.driver.send(QueryActualLevel(self.addr))
-                _LOGGER.debug(r)
+                _LOGGER.debug("DALI Light update: new brightness is {}".format(r))
                 if r:
-                    self._brightness = r.value.as_integer
-                    if 0 < self._brightness < 255:
+                    self._brightness = r.value
+                    if 0 < int(self._brightness) < 255:
                         self._state = True
                     else:
                         self._state = False
@@ -195,54 +203,72 @@ class DALILight(LightEntity):
 class DALIBus(LightEntity):
     """Representation of a DALI bus."""
 
-    def __init__(self, driver, driver_lock, controller_name):
+    def __init__(self, driver, driver_lock, controller_name, ballasts, max_buses, bus_index):
         from dali.gear.general import QueryActualLevel
         from dali.command import ResponseError, MissingResponse
+        from dali.address import Broadcast
+
         """Initialize a DALI Light."""
         self._brightness = 0
         self._state = False
         self._name = "{} bus".format(controller_name)
 
+        self.lamp_addresses = ballasts
+        self.attributes = {"short_addresses": [ballast.address for ballast in ballasts] }
+
         self.driver = driver
         self.driver_lock = driver_lock
-        self.addr = Short(0xFF)
+        self.addr = Broadcast()
 
-        # try:
-        #     with self.driver_lock:
-        #         cmd = QueryActualLevel(self.addr)
-        #         r = self.driver.send(cmd)
-        #         if r.value != None and r.value < 255:
-        #             self._brightness = r.value
-        #             if r.value > 0:
-        #                 r.state = True
+        self._unique_id = max_buses * MAX_RANGE + bus_index
 
-        except ResponseError as e:
-            _LOGGER.error("Response error on __init__")
-        except MissingResponse as e:
+        self.calculate_bus_state()
+
+    def calculate_bus_state(self):
+        from dali.gear.general import QueryActualLevel
+        from dali.command import ResponseError, MissingResponse
+        import usb
+
+        try:
+            with self.driver_lock:
+                last_brightness = None
+
+                for lamp_address in self.lamp_addresses:
+                    # query brightness
+                    result = self.driver.send(QueryActualLevel(lamp_address))
+                    _LOGGER.debug("DALI Bus update: lamp {} brightness is {}".format(lamp_address.address, result.value))
+
+                    # check if brightness is valid value
+                    if result.value != None and int(result.value) < 255 and (last_brightness == None or last_brightness == int(result.value)):
+                        last_brightness = int(result.value) # save brightness and keep checking
+
+                    else:
+                        _LOGGER.debug("Lamp {} returned invalid or different value; bus status is not unified")
+                        last_brightness = None #if brightness differs, the bus has no unified status
+                        break
+
+            _LOGGER.debug("DALI Bus update: new brightness is {}".format(last_brightness))
+
+            self._brightness = last_brightness
+            if self._brightness == None:
+                self._state = None
+            elif self._brightness > 0:
+                self._state = True
+            else:
+                self._state = False
+
+        except usb.core.USBError as e:
+            _LOGGER.error("USB Error {}: {}".format(self._name, e))
             self._brightness = None
             self._state = None
-
-    # def calculate_bus_status(self):
-    #     try:
-    #         with self.driver_lock:
-    #             last_brightness = None
-
-    #             for lamp in range(0, MAX_RANGE):
-    #                 # query brightness
-    #                 result = self.driver.send(QueryActualLevel(Short(lamp))
-
-    #                 # check if brightness is valid value
-    #                 if result.value != None and result.value < 255:
-
-    #                     # Check if brightness is the first one or not different
-    #                     if last_brightness == -1 or last_brightness == result.value:
-    #                         last_brightness = result.value # save brightness and keep checking
-
-    #                     else:
-    #                         last_brightness = None #if brightness differs, the bus has no unified status
-    #                         break
-
-    #         # update self.brightness handle exceptions etc.
+        except ResponseError as e:
+            _LOGGER.error("Response Error in QueryActualLevel: {}: {}".format(self._name, e))
+            self._brightness = None
+            self._state = None
+        except MissingResponse as e:
+            _LOGGER.error("Missing response: {}: {}".format(self._name, e))
+            self._brightness = None
+            self._state = None
 
     @property
     def name(self):
@@ -251,8 +277,11 @@ class DALIBus(LightEntity):
 
     @property
     def unique_id(self):
-        """Return the Short Address of this light."""
-        return self.addr.address
+        """The unique ID for a bus has to be outside the range of possible lamp 
+        unique IDs. As lamp IDs span in the ranges 0..63 for bus 0, 64..127 for bus
+        1, and so on, bus IDs begin *after* the last possible lamp ID, indicated by
+        64 * max_buses."""
+        return self._unique_id
 
     @property
     def brightness(self):
@@ -306,29 +335,8 @@ class DALIBus(LightEntity):
     @property
     def should_poll(self):
         """Doesn't make much sense to poll, commands have acks"""
-        return False 
+        return True
 
-    # def update(self):
-    #     """Fetch update state."""
-    #     from dali.gear.general import QueryActualLevel
-    #     from dali.command import ResponseError, MissingResponse
-    #     import usb
-
-    #     with self.driver_lock:
-    #         try:
-    #             r = self.driver.send(QueryActualLevel(self.addr))
-    #             _LOGGER.debug(r)
-    #             if r:
-    #                 self._brightness = r.value.as_integer
-    #                 if 0 < self._brightness < 255:
-    #                     self._state = True
-    #                 else:
-    #                     self._state = False
-    #             else:
-    #                 _LOGGER.error("return value = {}", r)
-    #         except usb.core.USBError as e:
-    #             _LOGGER.error("Can't update {}: {}".format(self._name, e))
-    #         except ResponseError as e:
-    #             _LOGGER.error("ResponseError QueryActualLevel")
-    #         except MissingResponse as e:
-    #             self._brightness = None
+    def update(self):
+        """Fetch update state."""
+        self.calculate_bus_state()
